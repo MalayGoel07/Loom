@@ -48,22 +48,16 @@ THINK = os.getenv("THINK", "false").lower() == "true"
 
 ollama = AsyncClient(host=OLLAMA_HOST)
 
-# ───────────────────────── MongoDB (original file storage, see db.py) ─────────────────────────
-# If .env is missing/incomplete or Atlas is unreachable, the app still works; originals just aren't kept.
 try:
     import db
-
     MONGO_OK = True
 except Exception as e:
     db = None
     MONGO_OK = False
     print(f"[mongo] disabled: {e!r}")
 
-
 def owner_of(request: Request) -> str:
-    """Single-user local app: one default owner. Send an X-User-Id header to separate users."""
     return request.headers.get("x-user-id") or os.getenv("DEFAULT_OWNER", "local")
-
 
 # ───────────────────────── RAG store ─────────────────────────
 def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -164,9 +158,7 @@ store = VectorStore(DATA / "store.json")
 # ───────────────────────── MCP client ─────────────────────────
 class MCPState:
     session: ClientSession | None = None
-    tools: list[dict] = []  # Ollama tool schema
-
-
+    tools: list[dict] = []
 mcp_state = MCPState()
 
 
@@ -198,10 +190,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="RAG + MCP", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"]
-)
-
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 async def call_mcp_tool(name: str, args: dict) -> str:
     if not mcp_state.session:
@@ -221,12 +210,10 @@ async def health():
         have = [m.model for m in (await ollama.list()).models]
     except Exception:
         have = None
-
     def present(name: str) -> bool | None:
         if have is None:
             return None
         return any(h == name or h.startswith(name + ":") or h.split(":")[0] == name for h in have)
-
     return {
         "ollama": have is not None,
         "models": {
@@ -238,18 +225,13 @@ async def health():
         "mongo": MONGO_OK,
     }
 
-
 @app.get("/api/tools")
 async def tools():
-    return [
-        {"name": t["function"]["name"], "description": t["function"]["description"]} for t in mcp_state.tools
-    ]
-
+    return [{"name": t["function"]["name"], "description": t["function"]["description"]} for t in mcp_state.tools]
 
 @app.get("/api/documents")
 async def list_documents():
     return sorted(store.docs.values(), key=lambda d: d["added"], reverse=True)
-
 
 @app.post("/api/documents")
 async def upload_document(request: Request, file: UploadFile = File(...)):
@@ -318,32 +300,26 @@ async def stored_files(request: Request):
     if not MONGO_OK:
         return []
     rows = await asyncio.to_thread(db.show_files, owner_of(request))
-    return [
-        {"id": r["_id"], "name": r["name"], "size": r["size"], "created": r["created"].isoformat()} for r in rows
-    ]
-
+    return [{"id": r["_id"], "name": r["name"], "size": r["size"], "created": r["created"].isoformat()} for r in rows]
 
 class SearchReq(BaseModel):
     query: str
     top_k: int = TOP_K
 
-
-@app.post("/api/search")  # also called by the MCP server's search_documents tool
+@app.post("/api/search")
 async def search(req: SearchReq):
     return await store.search(req.query, max(1, min(req.top_k, 10)))
 
 
 # ───────────────────────── chat (SSE) ─────────────────────────
 class ChatReq(BaseModel):
-    messages: list[dict]  # [{role: "user"|"assistant", content: str}]
-    images: list[str] = []  # base64 (no data: prefix) attached to the latest user message
+    messages: list[dict]
+    images: list[str] = []
     use_rag: bool = True
     use_tools: bool = True
 
-
 def sse(**event) -> str:
     return f"data: {json.dumps(event)}\n\n"
-
 
 SYSTEM = (
     "You are a helpful assistant running fully locally. "
@@ -351,7 +327,6 @@ SYSTEM = (
     "e.g. [notes.pdf]. If the context does not contain the answer, say so instead of guessing. "
     "Use tools when they help (math, current time, searching or listing documents). Be concise."
 )
-
 
 @app.post("/api/chat")
 async def chat(req: ChatReq):
@@ -396,9 +371,7 @@ async def chat(req: ChatReq):
             for _ in range(MAX_TOOL_ROUNDS + 1):
                 yield sse(type="status", text=f"Thinking with {CHAT_MODEL}…")
                 text, calls = "", []
-                async for chunk in await ollama.chat(
-                    model=CHAT_MODEL, messages=messages, tools=tools, stream=True, think=THINK
-                ):
+                async for chunk in await ollama.chat( model=CHAT_MODEL, messages=messages, tools=tools, stream=True, think=THINK11):
                     if chunk.message.content:
                         text += chunk.message.content
                         yield sse(type="token", text=chunk.message.content)
@@ -423,6 +396,4 @@ async def chat(req: ChatReq):
         except Exception as e:
             yield sse(type="error", text=str(e))
 
-    return StreamingResponse(
-        stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
